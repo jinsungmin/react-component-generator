@@ -1,5 +1,6 @@
 import { stripCodeFences, ensureRenderCall } from './generator';
 import { withModelFallback } from './fallback';
+import { extractAnthropicDelta, extractGeminiDelta, readDeltas, createNdjsonBody } from './stream';
 
 // 우선순위 순서. 앞 모델이 실패하면 다음 모델로 폴백한다.
 const GOOGLE_MODELS = ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
@@ -65,7 +66,10 @@ function resolveApiKey(provider: Provider, clientKey?: string): string | null {
   return clientKey || ENV_KEYS[provider] || null;
 }
 
-async function callAnthropic(prompt: string, apiKey: string): Promise<string> {
+type DeltaStream = AsyncIterable<string>;
+
+// 업스트림 연결을 먼저 열어 HTTP 에러(과부하/한도 초과 등)는 스트림 시작 전에 상태 코드로 응답할 수 있게 한다.
+async function openAnthropic(prompt: string, apiKey: string): Promise<DeltaStream> {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -76,27 +80,21 @@ async function callAnthropic(prompt: string, apiKey: string): Promise<string> {
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 4096,
+      stream: true,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
 
-  if (!response.ok) {
+  if (!response.ok || !response.body) {
     throw new Error(`Claude API error: ${response.status}`);
   }
 
-  const data = (await response.json()) as {
-    content: Array<{ type: string; text?: string }>;
-  };
-
-  return data.content
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('');
+  return readDeltas(response.body, extractAnthropicDelta);
 }
 
-async function callGoogleModel(prompt: string, apiKey: string, model: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+async function openGoogleModel(prompt: string, apiKey: string, model: string): Promise<DeltaStream> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -108,31 +106,45 @@ async function callGoogleModel(prompt: string, apiKey: string, model: string): P
     }),
   });
 
-  if (!response.ok) {
+  if (!response.ok || !response.body) {
     throw new Error(`Gemini API error: ${response.status}`);
   }
 
-  const data = (await response.json()) as {
-    candidates: Array<{
-      content: { parts: Array<{ text?: string }> };
-      finishReason?: string;
-    }>;
-  };
-
-  const candidate = data.candidates?.[0];
-  if (candidate?.finishReason === 'MAX_TOKENS') {
-    throw new Error('생성된 코드가 너무 길어 잘렸습니다. 더 간단한 컴포넌트를 요청해주세요.');
-  }
-
-  return (
-    candidate?.content?.parts
-      ?.map((part) => part.text)
-      ?.join('') ?? ''
-  );
+  return readDeltas(response.body, extractGeminiDelta);
 }
 
-async function callGoogle(prompt: string, apiKey: string): Promise<string> {
-  return withModelFallback(GOOGLE_MODELS, (model) => callGoogleModel(prompt, apiKey, model));
+// 모델 폴백은 연결(HTTP 상태) 단계에서만 동작한다. 스트림이 시작된 뒤의 실패는 폴백하지 않는다.
+async function openGoogle(prompt: string, apiKey: string): Promise<DeltaStream> {
+  return withModelFallback(GOOGLE_MODELS, (model) => openGoogleModel(prompt, apiKey, model));
+}
+
+function describeError(err: unknown): { status: number; message: string } {
+  const message = err instanceof Error ? err.message : 'Unknown error';
+
+  if (message.includes('503')) {
+    return { status: 503, message: 'API 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.' };
+  }
+  if (message.includes('429')) {
+    return { status: 429, message: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' };
+  }
+  return { status: 500, message };
+}
+
+// 델타를 NDJSON(delta → done | error)으로 내려보낸다. 최종 코드는 정규화해 done에 담는다.
+function toNdjsonResponse(deltas: DeltaStream): Response {
+  const body = createNdjsonBody(
+    deltas,
+    (raw) => ensureRenderCall(stripCodeFences(raw)),
+    (err) => describeError(err).message,
+  );
+
+  return new Response(body, {
+    headers: {
+      ...CORS_HEADERS,
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache',
+    },
+  });
 }
 
 const server = Bun.serve({
@@ -180,35 +192,15 @@ const server = Bun.serve({
           );
         }
 
-        const text =
+        const deltas =
           provider === 'google'
-            ? await callGoogle(prompt, resolvedKey)
-            : await callAnthropic(prompt, resolvedKey);
+            ? await openGoogle(prompt, resolvedKey)
+            : await openAnthropic(prompt, resolvedKey);
 
-        const code = ensureRenderCall(stripCodeFences(text));
-
-        return Response.json({ code }, { headers: CORS_HEADERS });
+        return toNdjsonResponse(deltas);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-
-        if (message.includes('503')) {
-          return Response.json(
-            { error: 'API 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.' },
-            { status: 503, headers: CORS_HEADERS }
-          );
-        }
-
-        if (message.includes('429')) {
-          return Response.json(
-            { error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' },
-            { status: 429, headers: CORS_HEADERS }
-          );
-        }
-
-        return Response.json(
-          { error: message },
-          { status: 500, headers: CORS_HEADERS }
-        );
+        const { status, message } = describeError(err);
+        return Response.json({ error: message }, { status, headers: CORS_HEADERS });
       }
     }
 

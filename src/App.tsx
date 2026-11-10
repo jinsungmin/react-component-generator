@@ -8,6 +8,7 @@ import {
 } from './utils/persisted';
 import { PromptInput } from './components/PromptInput';
 import { ComponentCard } from './components/ComponentCard';
+import { StreamingCard } from './components/StreamingCard';
 import { useComponentGenerator } from './hooks/useComponentGenerator';
 import type { Provider } from './types';
 import './App.css';
@@ -32,7 +33,7 @@ function App() {
     anthropic: false,
     google: false,
   });
-  const { components, isLoading, error, generate, removeComponent, clearAll } =
+  const { components, isLoading, streaming, error, generate, removeComponent, clearAll } =
     useComponentGenerator();
 
   useEffect(() => {
@@ -150,7 +151,7 @@ function App() {
           </div>
         )}
 
-        {components.length === 0 && !isLoading && (
+        {components.length === 0 && !streaming && (
           <div className="win win--empty">
             <div className="win-title">
               <span className="win-title-text">비어 있음</span>
@@ -165,21 +166,8 @@ function App() {
           </div>
         )}
 
-        {isLoading && (
-          <div className="win win--loading" role="status">
-            <div className="win-title">
-              <span className="win-title-text">작업 중</span>
-            </div>
-            <div className="win-body loading-body">
-              <div className="loading-bar" aria-hidden="true">
-                <span />
-              </div>
-              <p>컴포넌트를 생성하고 있습니다...</p>
-            </div>
-          </div>
-        )}
-
         <div className="results-grid">
+          {streaming && <StreamingCard streaming={streaming} />}
           {components.map((component) => (
             <ComponentCard
               key={component.id}
