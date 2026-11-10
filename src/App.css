@@ -620,3 +620,30 @@
     width: 100%;
   }
 }
+
+.prompt-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  font-size: 0.875rem;
+}
+
+.prompt-error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.prompt-count {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+}
+
+.prompt-count--over {
+  color: var(--danger);
+}
+
+.prompt-textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
