@@ -20,7 +20,7 @@ Stack: React 19, TypeScript, Vite, Vitest, react-live, Bun(API 프록시).
 Immutable:
 - API 키를 코드에 하드코딩하거나 커밋하지 않는다. 서버 키는 `.env`(gitignore 대상)에서만 읽는다 (`server/index.ts:59-62`).
 - 서버 환경변수 값을 클라이언트에 내려주지 않는다. `/api/config`는 키 존재 여부(boolean)만 반환한다 (`server/index.ts:147-153`). 이 응답에 값을 추가하지 마라.
-- 사용자가 UI에 입력한 키는 요청 본문으로만 전달한다 (`src/hooks/useComponentGenerator.ts:312`). localStorage 등에 저장하지 마라.
+- 사용자가 UI에 입력한 키는 서버 요청 본문으로만 전달하고, 브라우저에는 `rcg:apiKeys`(localStorage, 평문)에만 저장한다 (`src/App.tsx`, `src/hooks/usePersistentState.ts`). 쿠키, URL, 로그, 서버 저장소로 옮기지 마라.
 
 Do's & Don'ts:
 - API 포트 3002는 서버(`server/index.ts:139`)와 Vite 프록시(`vite.config.ts:11`) 두 곳에 있다. 변경 시 둘을 함께 수정한다.
