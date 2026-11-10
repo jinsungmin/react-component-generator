@@ -70,4 +70,18 @@ describe('PromptInput', () => {
     await user.click(screen.getByRole('button', { name: '컴포넌트 생성' }));
     expect(onGenerate).toHaveBeenCalledWith('a'.repeat(500));
   });
+
+  it('히스토리가 있으면 "최근 프롬프트"로 보여주고, 클릭하면 입력창에 채운다', async () => {
+    const user = userEvent.setup();
+    render(<PromptInput onGenerate={vi.fn()} isLoading={false} history={['버튼 컴포넌트', '카드']} />);
+
+    expect(screen.getByText('최근 프롬프트')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '버튼 컴포넌트' }));
+    expect(screen.getByRole('textbox')).toHaveValue('버튼 컴포넌트');
+  });
+
+  it('히스토리가 비어 있으면 "최근 프롬프트" 영역을 보여주지 않는다', () => {
+    render(<PromptInput onGenerate={vi.fn()} isLoading={false} history={[]} />);
+    expect(screen.queryByText('최근 프롬프트')).not.toBeInTheDocument();
+  });
 });
