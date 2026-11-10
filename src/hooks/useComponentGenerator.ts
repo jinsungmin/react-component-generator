@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { usePersistentState } from './usePersistentState';
 import { parseComponents } from '../utils/persisted';
 import { splitLines } from '../utils/ndjson';
@@ -15,6 +15,10 @@ interface UseComponentGeneratorReturn {
   clearAll: () => void;
 }
 
+// 서버의 업스트림 제한 시간(120초)보다 길게 잡아, 서버가 응답하지 않을 때만 동작하는 백스톱으로 쓴다.
+const REQUEST_TIMEOUT_MS = 130_000;
+const TIMEOUT_MESSAGE = '응답 시간이 초과되었습니다. 다시 시도해주세요.';
+
 export function useComponentGenerator(): UseComponentGeneratorReturn {
   const [components, setComponents] = usePersistentState<GeneratedComponent[]>(
     'rcg:components',
@@ -25,11 +29,20 @@ export function useComponentGenerator(): UseComponentGeneratorReturn {
   const [error, setError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState<StreamingState | null>(null);
   const inFlight = useRef(false);
+  const controllerRef = useRef<AbortController | null>(null);
+
+  // 언마운트되면 진행 중인 요청과 스트림 읽기를 중단한다.
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   const generate = useCallback(async (prompt: string, apiKey: string | undefined, provider: Provider) => {
     // 진행 중인 생성이 있으면 상태가 서로 덮어쓰이지 않도록 새 요청을 무시한다.
     if (inFlight.current) return;
     inFlight.current = true;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+    }, REQUEST_TIMEOUT_MS);
     setIsLoading(true);
     setError(null);
     setStreaming({ prompt, code: '' });
@@ -37,6 +50,7 @@ export function useComponentGenerator(): UseComponentGeneratorReturn {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, ...(apiKey && { apiKey }), provider }),
       });
@@ -99,9 +113,11 @@ export function useComponentGenerator(): UseComponentGeneratorReturn {
 
       setComponents((prev) => [newComponent, ...prev]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
+      const timedOut = (controller.signal.reason as { name?: string } | undefined)?.name === 'TimeoutError';
+      const message = timedOut ? TIMEOUT_MESSAGE : err instanceof Error ? err.message : 'Unknown error';
       setError(message);
     } finally {
+      clearTimeout(timer);
       inFlight.current = false;
       setStreaming(null);
       setIsLoading(false);

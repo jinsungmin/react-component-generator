@@ -1,6 +1,8 @@
 // 업스트림 스트리밍(SSE) 응답을 해석하는 순수 함수들.
 // 부수효과가 없어 단위 테스트가 가능하다.
 
+import { UserFacingError } from './errors';
+
 const TRUNCATED_MESSAGE = '생성된 코드가 너무 길어 잘렸습니다. 더 간단한 컴포넌트를 요청해주세요.';
 
 const ANTHROPIC_ERROR_CODES: Record<string, string> = {
@@ -43,7 +45,7 @@ export function extractAnthropicDelta(payload: string): string {
     throw new Error(`Claude API error: ${code}`);
   }
   if (event.type === 'message_delta' && event.delta?.stop_reason === 'max_tokens') {
-    throw new Error(TRUNCATED_MESSAGE);
+    throw new UserFacingError(TRUNCATED_MESSAGE);
   }
   if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
     return event.delta.text ?? '';
@@ -138,7 +140,7 @@ export function extractGeminiDelta(payload: string): string {
 
   const candidate = data.candidates?.[0];
   if (candidate?.finishReason === 'MAX_TOKENS') {
-    throw new Error(TRUNCATED_MESSAGE);
+    throw new UserFacingError(TRUNCATED_MESSAGE);
   }
   return candidate?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
 }

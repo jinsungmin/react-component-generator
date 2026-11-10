@@ -221,3 +221,75 @@ describe('useComponentGenerator 영속성', () => {
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual([]);
   });
 });
+
+// signal이 abort되면 AbortError로 reject하는 fetch 목. 응답이 영원히 오지 않는 서버를 흉내 낸다.
+function hangingFetch() {
+  return vi.fn((_url: string, init?: RequestInit) => {
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    });
+  });
+}
+
+describe('useComponentGenerator 중단', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('언마운트하면 진행 중인 요청의 signal이 abort된다', () => {
+    const fetchMock = hangingFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { result, unmount } = renderHook(() => useComponentGenerator());
+
+    act(() => {
+      void result.current.generate('카드', undefined, 'google');
+    });
+    const signal = fetchMock.mock.calls[0][1]?.signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+
+    unmount();
+
+    expect(signal.aborted).toBe(true);
+  });
+
+  it('응답이 제한 시간 안에 오지 않으면 시간 초과 에러를 보여준다', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', hangingFetch());
+    const { result } = renderHook(() => useComponentGenerator());
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.generate('카드', undefined, 'google');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(130_000);
+      await pending;
+    });
+
+    expect(result.current.error).toBe('응답 시간이 초과되었습니다. 다시 시도해주세요.');
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('시간 초과 뒤에는 다시 생성을 시작할 수 있다', async () => {
+    vi.useFakeTimers();
+    const fetchMock = hangingFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useComponentGenerator());
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.generate('카드', undefined, 'google');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(130_000);
+      await pending;
+    });
+    act(() => {
+      void result.current.generate('다시', undefined, 'google');
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

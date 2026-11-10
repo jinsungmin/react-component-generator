@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { UserFacingError } from './errors';
 import {
   parseSseChunk,
   extractAnthropicDelta,
@@ -77,6 +78,14 @@ describe('extractGeminiDelta', () => {
       candidates: [{ content: { parts: [{ text: 'x' }] }, finishReason: 'MAX_TOKENS' }],
     });
     expect(() => extractGeminiDelta(payload)).toThrow('너무 길어');
+  });
+
+  it('잘림 에러는 사용자에게 그대로 보여줄 수 있는 UserFacingError다', () => {
+    const anthropic = JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } });
+    const gemini = JSON.stringify({ candidates: [{ finishReason: 'MAX_TOKENS' }] });
+
+    expect(() => extractAnthropicDelta(anthropic)).toThrow(UserFacingError);
+    expect(() => extractGeminiDelta(gemini)).toThrow(UserFacingError);
   });
 });
 
